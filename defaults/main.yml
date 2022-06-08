@@ -1,0 +1,10 @@
+---
+
+dm_crypt_swap_device: ~
+dm_crypt_luks_disks: []
+#    { dev: sdb, partition: sdb1, luks_name: data }
+
+dm_crypt_luks_files: []
+#    { luks_name: disk, file: /var/lib/disk.img, size: 1G }
+
+dm_crypt_key_file: ~

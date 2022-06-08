@@ -1,0 +1,88 @@
+---
+
+- name: Install crypt packages
+  yum:
+    name: cryptsetup
+    state: present
+  when: ansible_os_family == "RedHat"
+
+- name: Install crypt packages
+  apt:
+    name: cryptsetup-bin
+    state: present
+  when: ansible_os_family == "Debian"
+
+- name: Add crypt swap
+  crypttab:
+    name: swap
+    opts: 'swap,cipher=aes-xts-plain64,size=256,timeout=30'
+    backing_device: "{{ dm_crypt_swap_device }}"
+    password: /dev/urandom
+    state: present
+  when: not dm_crypt_swap_device == none
+  no_log: true
+
+- name: Mount swap
+  mount:
+    path: swap
+    src: /dev/mapper/swap
+    fstype: swap
+    opts: sw,nofail
+    state: present
+  when: not dm_crypt_swap_device == none
+
+- name: Create key file (if not exist)
+  command: dd if=/dev/urandom of={{ dm_crypt_key_file }} bs=512 count=1 creates={{ dm_crypt_key_file }}
+  when: not dm_crypt_key_file == none
+- file:
+    path: "{{ dm_crypt_key_file }}"
+    owner: root
+    group: root
+    mode: 0400
+  when: not dm_crypt_key_file == none
+
+- name: format disk
+  shell: "echo 'YES' | cryptsetup luksFormat /dev/{{ item.partition | default(item.dev) }} -c aes-xts-plain -s 256 --use-urandom --key-file={{ dm_crypt_key_file }}"
+  when: ansible_devices[item.dev] is defined and ((item.partition is not defined and not ansible_devices[item.dev].links.uuids)
+        or (item.partition is defined and ansible_devices[item.dev].partitions[item.partition] is defined
+            and not ansible_devices[item.dev].partitions[item.partition].uuid))
+  register: disk_update
+  with_items:
+    - "{{ dm_crypt_luks_disks }}"
+
+- name: create file
+  command: fallocate -l {{ item.size }} {{ item.file }} creates={{ item.file }}
+  register: file_update
+  with_items:
+    - "{{ dm_crypt_luks_files }}"
+
+- name: format filedisk
+  shell: "echo 'YES' | cryptsetup luksFormat {{ item.item.file }} -c aes-xts-plain -s 256 --use-urandom --key-file={{ dm_crypt_key_file }}"
+  when: file_update.changed and item.changed
+  with_items:
+    - "{{ file_update.results }}"
+
+- setup:
+  when: disk_update.changed
+
+- name: Update crypttab for disks
+  crypttab:
+    name: "{{ item.luks_name }}"
+    opts: 'luks,nofail,timeout=30'
+    backing_device: "UUID={% if item.partition is defined %}{{ ansible_devices[item.dev].partitions[item.partition].uuid }}{% else %}{{ ansible_devices[item.dev].links.uuids | first }}{% endif %}"
+    password: "{{ dm_crypt_key_file }}"
+    state: present
+  with_items:
+    - "{{ dm_crypt_luks_disks }}"
+  no_log: true
+
+- name: Update crypttab for files
+  crypttab:
+    name: "{{ item.luks_name }}"
+    opts: 'luks,nofail,timeout=30'
+    backing_device: "{{ item.file }}"
+    password: "{{ dm_crypt_key_file }}"
+    state: present
+  with_items:
+    - "{{ dm_crypt_luks_files }}"
+  no_log: true
